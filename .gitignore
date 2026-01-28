@@ -1,3 +1,10 @@
+# Users often leave PDFs around
+*.pdf
+*.PDF
+
+# Vim editor
+*.swp
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
