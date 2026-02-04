@@ -92,6 +92,12 @@ python3 pdf_score_splitter.py --pdf your_score.pdf
 
 # Skip confirmation prompt and execute immediately
 python3 pdf_score_splitter.py --pdf your_score.pdf --yes
+
+# Specify output directory for split files
+python3 pdf_score_splitter.py --pdf your_score.pdf --out output_folder
+
+# Combine options: skip confirmation and use custom output directory
+python3 pdf_score_splitter.py --pdf your_score.pdf --yes --out parts
 ```
 
 ### What Happens on execution

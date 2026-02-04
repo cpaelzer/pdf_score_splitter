@@ -111,6 +111,7 @@ class TestGroupPagesByInstrument:
         assert commands[0].start_page == 1
         assert commands[0].end_page == 1
         assert commands[0].output_file == "Flöte.pdf"
+        assert commands[0].output_dir is None
 
     def test_multi_page_instruments(self):
         pages = [
@@ -124,26 +125,50 @@ class TestGroupPagesByInstrument:
         assert commands[0].start_page == 1
         assert commands[0].end_page == 2
         assert commands[0].output_file == "Keyboard.pdf"
+        assert commands[0].output_dir is None
 
     def test_empty_pages(self):
         commands = group_pages_by_instrument([])
         assert commands == []
+
+    def test_group_with_output_dir(self):
+        from pathlib import Path
+        pages = [
+            InstrumentPage(1, "Flöte"),
+            InstrumentPage(2, "Oboe"),
+        ]
+        output_dir = Path("/tmp/output")
+        commands = group_pages_by_instrument(pages, output_dir)
+
+        assert len(commands) == 2
+        assert commands[0].output_dir == output_dir
+        assert commands[1].output_dir == output_dir
+        assert commands[0].output_file == "Flöte.pdf"
+        assert commands[1].output_file == "Oboe.pdf"
 
 
 class TestSplitCommand:
     """Test split command generation."""
 
     def test_single_page_command(self):
-        cmd = SplitCommand("Flöte", 1, 1, "Flöte.pdf")
+        cmd = SplitCommand("Flöte", 1, 1, "Flöte.pdf", None)
         pdftk_cmd = cmd.to_pdftk_command("Noten.pdf")
 
         assert pdftk_cmd == ["pdftk", "Noten.pdf", "cat", "1", "output", "Flöte.pdf"]
 
     def test_multi_page_command(self):
-        cmd = SplitCommand("Percussion", 47, 49, "Percussion.pdf")
+        cmd = SplitCommand("Percussion", 47, 49, "Percussion.pdf", None)
         pdftk_cmd = cmd.to_pdftk_command("Noten.pdf")
 
         assert pdftk_cmd == ["pdftk", "Noten.pdf", "cat", "47-49", "output", "Percussion.pdf"]
+
+    def test_command_with_output_dir(self):
+        from pathlib import Path
+        output_dir = Path("/tmp/output")
+        cmd = SplitCommand("Flöte", 1, 1, "Flöte.pdf", output_dir)
+        pdftk_cmd = cmd.to_pdftk_command("Noten.pdf")
+
+        assert pdftk_cmd == ["pdftk", "Noten.pdf", "cat", "1", "output", "/tmp/output/Flöte.pdf"]
 
 
 class TestBuildCopilotPrompt:

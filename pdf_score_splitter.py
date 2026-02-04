@@ -33,6 +33,7 @@ class SplitCommand:
     start_page: int
     end_page: int
     output_file: str
+    output_dir: Path | None = None
 
     def to_pdftk_command(self, input_pdf: str) -> list[str]:
         """Convert to pdftk command arguments."""
@@ -41,7 +42,8 @@ class SplitCommand:
             if self.start_page == self.end_page
             else f"{self.start_page}-{self.end_page}"
         )
-        return ["pdftk", input_pdf, "cat", page_range, "output", self.output_file]
+        output_path = str(self.output_dir / self.output_file) if self.output_dir else self.output_file
+        return ["pdftk", input_pdf, "cat", page_range, "output", output_path]
 
 
 class PDFAnalyzerError(Exception):
@@ -367,7 +369,7 @@ def process_instrument_results(
     return results
 
 
-def group_pages_by_instrument(pages: list[InstrumentPage]) -> list[SplitCommand]:
+def group_pages_by_instrument(pages: list[InstrumentPage], output_dir: Path | None = None) -> list[SplitCommand]:
     """Group consecutive pages by instrument into split commands."""
     if not pages:
         return []
@@ -382,7 +384,7 @@ def group_pages_by_instrument(pages: list[InstrumentPage]) -> list[SplitCommand]
             safe_name = sanitize_filename(current_instrument)
             commands.append(
                 SplitCommand(
-                    current_instrument, start_page, pages[i - 1].page_num, f"{safe_name}.pdf"
+                    current_instrument, start_page, pages[i - 1].page_num, f"{safe_name}.pdf", output_dir
                 )
             )
             # Start new group
@@ -392,7 +394,7 @@ def group_pages_by_instrument(pages: list[InstrumentPage]) -> list[SplitCommand]
     # Add final group
     safe_name = sanitize_filename(current_instrument)
     commands.append(
-        SplitCommand(current_instrument, start_page, pages[-1].page_num, f"{safe_name}.pdf")
+        SplitCommand(current_instrument, start_page, pages[-1].page_num, f"{safe_name}.pdf", output_dir)
     )
 
     return commands
@@ -463,9 +465,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Split wind band PDF scores by instrument using AI-powered OCR analysis"
     )
-    parser.add_argument("--pdf", type=Path, default=Path("score.pdf"), help="PDF file to analyze")
+    parser.add_argument("--pdf", type=Path, default=Path("Noten.pdf"), help="PDF file to analyze")
     parser.add_argument(
         "--yes", "-y", action="store_true", help="Skip confirmation prompt and execute immediately"
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None, help="Output directory for split PDF files (default: current directory)"
     )
     args = parser.parse_args()
 
@@ -480,6 +485,11 @@ def main() -> int:
             raise PDFAnalyzerError(
                 f"PDF file not found: {args.pdf}\nPlease check the path and try again."
             )
+
+        # Create output directory if specified
+        if args.out:
+            args.out.mkdir(parents=True, exist_ok=True)
+            print(f"Output directory: {args.out}\n", file=sys.stderr)
 
         # Get page count
         total_pages = get_page_count(args.pdf)
@@ -503,7 +513,7 @@ def main() -> int:
         instrument_pages = process_instrument_results(instruments_dict, total_pages)
 
         # Step 4: Group into commands
-        commands = group_pages_by_instrument(instrument_pages)
+        commands = group_pages_by_instrument(instrument_pages, args.out)
 
         # Step 5: Confirm and execute
         if not args.yes and not confirm_execution(commands, args.pdf):
