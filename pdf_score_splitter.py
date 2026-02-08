@@ -246,6 +246,9 @@ Example format:
 }
 
 Be flexible with instrument names - use the clearest German or English name based on what you see.
+Continuation pages usually have either: No instrument header on subsequent pages,
+or repeat the (sometimes simplified) instrument name,
+or just the page number.
 For percussion, use the specific instrument name if clear (e.g., "Glockenspiel", "Pauke"),
 or "Percussion" for general percussion parts.
 
