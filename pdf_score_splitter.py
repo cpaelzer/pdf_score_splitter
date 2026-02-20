@@ -232,18 +232,18 @@ INSTRUCTIONS:
 4. For continuation pages (no instrument header), return "CONTINUATION"
 5. Only use "UNKNOWN" if you truly cannot determine the instrument
 
-OUTPUT FORMAT:
-Respond with a JSON object mapping page numbers to instrument designations.
+CRITICAL - OUTPUT FORMAT:
+You MUST respond with ONLY a valid JSON object. This is essential for automated parsing.
+
+REQUIREMENTS:
+- Start with { and end with }
+- Use double quotes for all strings
+- Do NOT wrap in markdown code fences (no ```json or ```)
+- Do NOT add any explanatory text before or after the JSON
+- Ensure all commas and braces are correct
 
 Example format:
-{
-  "1": "Flöte",
-  "2": "1. Klarinette Bb",
-  "3": "2. Klarinette Bb",
-  "4": "CONTINUATION",
-  "5": "Percussion",
-  ...
-}
+{"1": "Flöte", "2": "1. Klarinette Bb", "3": "2. Klarinette Bb", "4": "CONTINUATION", "5": "Percussion"}
 
 Be flexible with instrument names - use the clearest German or English name based on what you see.
 Continuation pages usually have either: No instrument header on subsequent pages,
