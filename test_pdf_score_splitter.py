@@ -1,4 +1,4 @@
-"""Tests for the PDF score splitter - with mocked Copilot to avoid API costs.
+"""Tests for the PDF score splitter - with mocked LLM to avoid API costs.
 
 Copyright (c) 2026 Christian Ehrhardt <paelzer@gmail.com>
 SPDX-License-Identifier: MIT
@@ -13,9 +13,10 @@ from unittest.mock import Mock, patch
 import pytest
 
 from pdf_score_splitter import (
+    DependencyError,
     InstrumentPage,
     SplitCommand,
-    build_copilot_prompt,
+    build_llm_prompt,
     check_dependencies,
     extract_json_from_response,
     group_pages_by_instrument,
@@ -42,7 +43,7 @@ class TestSanitizeFilename:
 
 
 class TestExtractJsonFromResponse:
-    """Test JSON extraction from Copilot responses."""
+    """Test JSON extraction from LLM responses."""
 
     def test_json_in_code_block(self):
         response = '```json\n{"1": "Flöte", "2": "Oboe"}\n```'
@@ -133,6 +134,7 @@ class TestGroupPagesByInstrument:
 
     def test_group_with_output_dir(self):
         from pathlib import Path
+
         pages = [
             InstrumentPage(1, "Flöte"),
             InstrumentPage(2, "Oboe"),
@@ -164,6 +166,7 @@ class TestSplitCommand:
 
     def test_command_with_output_dir(self):
         from pathlib import Path
+
         output_dir = Path("/tmp/output")
         cmd = SplitCommand("Flöte", 1, 1, "Flöte.pdf", output_dir)
         pdftk_cmd = cmd.to_pdftk_command("Noten.pdf")
@@ -171,12 +174,12 @@ class TestSplitCommand:
         assert pdftk_cmd == ["pdftk", "Noten.pdf", "cat", "1", "output", "/tmp/output/Flöte.pdf"]
 
 
-class TestBuildCopilotPrompt:
-    """Test Copilot prompt building."""
+class TestBuildLlmPrompt:
+    """Test LLM prompt building."""
 
     def test_prompt_structure(self):
         page_texts = {1: "Flöte text here", 2: "Oboe text here"}
-        prompt = build_copilot_prompt(page_texts)
+        prompt = build_llm_prompt(page_texts)
 
         assert "wind band" in prompt.lower()
         assert "Page 1:" in prompt
@@ -187,7 +190,7 @@ class TestBuildCopilotPrompt:
     def test_prompt_truncates_text(self):
         long_text = "█" * 1000  # Use a unique character
         page_texts = {1: long_text}
-        prompt = build_copilot_prompt(page_texts)
+        prompt = build_llm_prompt(page_texts)
 
         # Should only include first 400 chars
         assert prompt.count("█") == 400
@@ -207,8 +210,9 @@ class TestCheckDependencies:
         # All commands succeed
         mock_subprocess_run.return_value = Mock(returncode=0)
 
-        # Should not raise
-        check_dependencies()
+        # openai package is available
+        with patch("importlib.util.find_spec", return_value=Mock()):
+            check_dependencies()
 
     def test_missing_dependency(self, mock_subprocess_run):
         # Simulate missing command
@@ -219,83 +223,112 @@ class TestCheckDependencies:
 
         assert "Missing required dependencies" in str(exc_info.value)
 
+    def test_missing_openai(self, mock_subprocess_run):
+        mock_subprocess_run.return_value = Mock(returncode=0)
 
-class TestAskCopilotBatch:
-    """Test Copilot batch processing."""
+        with (
+            patch("importlib.util.find_spec", return_value=None),
+            pytest.raises(DependencyError) as exc_info,
+        ):
+            check_dependencies()
 
-    def test_successful_request(self, mock_subprocess_run):
-        """Test successful Copilot request."""
-        mock_subprocess_run.return_value = Mock(
-            returncode=0,
-            stdout='```json\n{"1": "Flöte", "2": "Oboe"}\n```',
-            stderr="",
-        )
+        assert "python3-openai" in str(exc_info.value)
 
-        from pdf_score_splitter import ask_copilot_batch
+
+@pytest.fixture
+def mock_chat_completion():
+    """Mock _chat_completion to avoid actual API calls."""
+    with patch("pdf_score_splitter._chat_completion") as mock:
+        yield mock
+
+
+class TestAskLlmBatch:
+    """Test LLM batch processing."""
+
+    def test_successful_request(self, mock_chat_completion):
+        """Test successful LLM request with plain JSON."""
+        mock_chat_completion.return_value = '{"1": "Flöte", "2": "Oboe"}'
+
+        from pdf_score_splitter import ask_llm_batch
 
         page_texts = {1: "Flöte text", 2: "Oboe text"}
-        result = ask_copilot_batch(page_texts)
+        result = ask_llm_batch(page_texts, "fake-key", "https://fake", "fake-model")
 
         assert result == {1: "Flöte", 2: "Oboe"}
 
-    def test_copilot_timeout(self, mock_subprocess_run):
-        """Test timeout handling."""
-        from pdf_score_splitter import PDFAnalyzerError, ask_copilot_batch
+    def test_code_block_json(self, mock_chat_completion):
+        """Test parsing JSON wrapped in code blocks."""
+        mock_chat_completion.return_value = '```json\n{"1": "Flöte", "2": "Oboe"}\n```'
 
-        mock_subprocess_run.side_effect = subprocess.TimeoutExpired("copilot", 60)
+        from pdf_score_splitter import ask_llm_batch
 
-        with pytest.raises(PDFAnalyzerError) as exc_info:
-            ask_copilot_batch({1: "test"})
+        result = ask_llm_batch({1: "test"}, "fake-key", "https://fake", "fake-model")
+        assert result == {1: "Flöte", 2: "Oboe"}
 
-        assert "timed out" in str(exc_info.value)
+    def test_non_json_response(self, mock_chat_completion):
+        """Test handling of non-JSON response."""
+        from pdf_score_splitter import PDFAnalyzerError, ask_llm_batch
 
-    def test_copilot_not_found(self, mock_subprocess_run):
-        """Test handling when copilot command not found."""
-        from pdf_score_splitter import PDFAnalyzerError, ask_copilot_batch
-
-        mock_subprocess_run.side_effect = FileNotFoundError()
+        mock_chat_completion.return_value = "This is not JSON at all"
 
         with pytest.raises(PDFAnalyzerError) as exc_info:
-            ask_copilot_batch({1: "test"})
-
-        assert "not found" in str(exc_info.value)
-
-    def test_copilot_error_code(self, mock_subprocess_run):
-        """Test handling when copilot returns error code."""
-        from pdf_score_splitter import PDFAnalyzerError, ask_copilot_batch
-
-        mock_subprocess_run.return_value = Mock(returncode=1, stdout="", stderr="Auth error")
-
-        with pytest.raises(PDFAnalyzerError) as exc_info:
-            ask_copilot_batch({1: "test"})
-
-        assert "error" in str(exc_info.value).lower()
-
-    def test_invalid_json_response(self, mock_subprocess_run):
-        """Test handling of invalid JSON in response."""
-        from pdf_score_splitter import PDFAnalyzerError, ask_copilot_batch
-
-        mock_subprocess_run.return_value = Mock(
-            returncode=0, stdout="This is not JSON at all", stderr=""
-        )
-
-        with pytest.raises(PDFAnalyzerError) as exc_info:
-            ask_copilot_batch({1: "test"})
+            ask_llm_batch({1: "test"}, "fake-key", "https://fake", "fake-model")
 
         assert "JSON" in str(exc_info.value)
 
-    def test_malformed_json(self, mock_subprocess_run):
+    def test_malformed_json(self, mock_chat_completion):
         """Test handling of malformed JSON."""
-        from pdf_score_splitter import PDFAnalyzerError, ask_copilot_batch
+        from pdf_score_splitter import PDFAnalyzerError, ask_llm_batch
 
-        mock_subprocess_run.return_value = Mock(
-            returncode=0, stdout='{"1": "Flöte", invalid}', stderr=""
-        )
+        mock_chat_completion.return_value = '{"1": "Flöte", invalid}'
 
         with pytest.raises(PDFAnalyzerError) as exc_info:
-            ask_copilot_batch({1: "test"})
+            ask_llm_batch({1: "test"}, "fake-key", "https://fake", "fake-model")
 
         assert "parse" in str(exc_info.value).lower()
+
+    def test_chat_completion_error_propagation(self, mock_chat_completion):
+        """Test that errors from _chat_completion are propagated as PDFAnalyzerError."""
+        from pdf_score_splitter import PDFAnalyzerError, ask_llm_batch
+
+        mock_chat_completion.side_effect = PDFAnalyzerError("API error")
+
+        with pytest.raises(PDFAnalyzerError) as exc_info:
+            ask_llm_batch({1: "test"}, "fake-key", "https://fake", "fake-model")
+
+        assert "API error" in str(exc_info.value)
+
+
+class TestChatCompletion:
+    """Test _chat_completion openai interaction and error handling."""
+
+    def test_openai_import_error(self):
+        """Test that missing openai package raises PDFAnalyzerError."""
+        from pdf_score_splitter import PDFAnalyzerError, _chat_completion
+
+        with (
+            patch.dict("sys.modules", {"openai": None}),
+            pytest.raises(PDFAnalyzerError) as exc_info,
+        ):
+            _chat_completion("test", "fake-key", "https://fake", "fake-model")
+
+        assert "openai" in str(exc_info.value).lower()
+
+    def test_api_error_wrapping(self):
+        """Test that API errors are wrapped in PDFAnalyzerError."""
+        pytest.importorskip("openai")
+
+        from pdf_score_splitter import PDFAnalyzerError, _chat_completion
+
+        with patch("openai.OpenAI") as mock_openai:
+            mock_client = Mock()
+            mock_openai.return_value = mock_client
+            mock_client.chat.completions.create.side_effect = Exception("API down")
+
+            with pytest.raises(PDFAnalyzerError) as exc_info:
+                _chat_completion("test", "fake-key", "https://fake", "fake-model")
+
+            assert "failed" in str(exc_info.value).lower() or "API" in str(exc_info.value)
 
 
 class TestGetPageCount:
@@ -377,7 +410,9 @@ class TestExtractTextFromPage:
 
         from pdf_score_splitter import extract_text_from_page
 
-        mock_subprocess_run.side_effect = subprocess.CalledProcessError(1, "tesseract", stderr=b"OCR failed")
+        mock_subprocess_run.side_effect = subprocess.CalledProcessError(
+            1, "tesseract", stderr=b"OCR failed"
+        )
 
         # Should not raise, just return empty string
         text = extract_text_from_page(Path("test.pdf"), 1)
@@ -396,40 +431,34 @@ class TestExtractTextFromPage:
         assert text == ""
 
 
-class TestIntegrationWithMockedCopilot:
-    """Integration tests with mocked Copilot API."""
+class TestIntegrationWithMockedLlm:
+    """Integration tests with mocked LLM API."""
 
     @pytest.fixture
-    def mock_copilot_response(self):
-        """Mock Copilot CLI response."""
-        return Mock(
-            returncode=0,
-            stdout=json.dumps(
-                {
-                    "1": "Flöte",
-                    "2": "Oboe",
-                    "3": "1. Klarinette Bb",
-                    "4": "CONTINUATION",
-                }
-            ),
-            stderr="",
+    def mock_llm_response(self):
+        """Mock LLM API response (plain JSON string)."""
+        return json.dumps(
+            {
+                "1": "Flöte",
+                "2": "Oboe",
+                "3": "1. Klarinette Bb",
+                "4": "CONTINUATION",
+            }
         )
 
-    def test_end_to_end_with_mock(self, mock_subprocess_run, mock_copilot_response):
-        """Test the full flow with mocked Copilot."""
-        # Setup mocks
-        mock_subprocess_run.return_value = mock_copilot_response
+    def test_end_to_end_with_mock(self, mock_llm_response):
+        """Test the full flow with mocked LLM."""
+        with patch("pdf_score_splitter._chat_completion", return_value=mock_llm_response):
+            from pdf_score_splitter import ask_llm_batch
 
-        from pdf_score_splitter import ask_copilot_batch
+            page_texts = {
+                1: "Flöte arrangement...",
+                2: "Oboe arrangement...",
+                3: "1. Klarinette in Bb...",
+                4: "Continuation of klarinette...",
+            }
 
-        page_texts = {
-            1: "Flöte arrangement...",
-            2: "Oboe arrangement...",
-            3: "1. Klarinette in Bb...",
-            4: "Continuation of klarinette...",
-        }
-
-        result = ask_copilot_batch(page_texts)
+            result = ask_llm_batch(page_texts, "fake-key", "https://fake", "fake-model")
 
         assert result[1] == "Flöte"
         assert result[2] == "Oboe"

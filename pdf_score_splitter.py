@@ -8,7 +8,9 @@ SPDX-License-Identifier: MIT
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -43,7 +45,9 @@ class SplitCommand:
             if self.start_page == self.end_page
             else f"{self.start_page}-{self.end_page}"
         )
-        output_path = str(self.output_dir / self.output_file) if self.output_dir else self.output_file
+        output_path = (
+            str(self.output_dir / self.output_file) if self.output_dir else self.output_file
+        )
         return ["pdftk", input_pdf, "cat", page_range, "output", output_path]
 
 
@@ -66,7 +70,6 @@ def check_dependencies() -> None:
         "convert": "Install with: apt-get install imagemagick",
         "tesseract": "Install with: apt-get install tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng",
         "pdftk": "Install with: apt-get install pdftk",
-        "copilot": "Install GitHub Copilot CLI from: https://github.com/github/gh-copilot",
     }
 
     missing = []
@@ -80,6 +83,9 @@ def check_dependencies() -> None:
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             missing.append(f"  - {cmd}: {install_msg}")
+
+    if not importlib.util.find_spec("openai"):
+        missing.append("  - python3-openai: Install with: apt-get install python3-openai")
 
     if missing:
         raise DependencyError("Missing required dependencies:\n" + "\n".join(missing))
@@ -159,8 +165,8 @@ def extract_text_from_page(pdf_path: Path, page_num: int) -> str:
         return ""
 
 
-def build_copilot_prompt(page_texts: dict[int, str]) -> str:
-    """Build the batch prompt for Copilot analysis."""
+def build_llm_prompt(page_texts: dict[int, str]) -> str:
+    """Build the batch prompt for LLM analysis."""
     prompt = """I am analyzing a wind band/concert band music score PDF. Each page has been OCR'd (may contain recognition errors).
 
 TASK: Identify which instrument each page is for based on the OCR text.
@@ -258,47 +264,66 @@ JSON response:"""
     return prompt
 
 
-def ask_copilot_batch(page_texts: dict[int, str]) -> dict[int, str]:
-    """Make a single Copilot request for all pages at once."""
-    prompt = build_copilot_prompt(page_texts)
+def _chat_completion(
+    prompt: str,
+    api_key: str,
+    api_base: str,
+    model: str,
+    timeout: int = 120,
+) -> str:
+    """Send a chat completion request to an OpenAI-compatible API."""
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise PDFAnalyzerError(
+            "openai package not found. Install with: apt-get install python3-openai"
+        ) from e
 
-    print("  Sending batch request to Copilot...", file=sys.stderr)
+    client = OpenAI(api_key=api_key, base_url=api_base)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=timeout,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        if "response_format" in str(e).lower():
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    timeout=timeout,
+                )
+                return response.choices[0].message.content
+            except Exception as e2:
+                raise PDFAnalyzerError(f"LLM API request failed: {e2}") from e2
+        raise PDFAnalyzerError(f"LLM API request failed: {e}") from e
+
+
+def ask_llm_batch(
+    page_texts: dict[int, str],
+    api_key: str,
+    api_base: str,
+    model: str,
+) -> dict[int, str]:
+    """Make a single LLM request for all pages at once."""
+    prompt = build_llm_prompt(page_texts)
+
+    print("  Sending batch request to LLM...", file=sys.stderr)
     print(f"  Prompt includes {len(prompt):,} characters", file=sys.stderr)
 
-    try:
-        result = subprocess.run(
-            ["copilot", "--allow-all-tools"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise PDFAnalyzerError(
-            "Copilot request timed out after 60 seconds. "
-            "Try with a smaller PDF or check your internet connection."
-        ) from e
-    except FileNotFoundError as e:
-        raise PDFAnalyzerError(
-            "GitHub Copilot CLI not found. "
-            "Please install it and authenticate: https://github.com/github/gh-copilot"
-        ) from e
+    response = _chat_completion(prompt, api_key, api_base, model)
 
-    if result.returncode != 0:
-        raise PDFAnalyzerError(
-            f"Copilot CLI returned error (code {result.returncode}). "
-            f"Make sure you're logged in with 'copilot' or check your authentication. "
-            f"Error: {result.stderr[:200]}"
-        )
-
-    response = result.stdout
     print(f"  Received response: {len(response):,} characters", file=sys.stderr)
 
-    # Extract JSON from response
     json_str = extract_json_from_response(response)
     if not json_str:
         raise PDFAnalyzerError(
-            "Could not extract valid JSON from Copilot response. "
+            "Could not extract valid JSON from LLM response. "
             "This may be a temporary issue - try running again."
         )
 
@@ -308,13 +333,12 @@ def ask_copilot_batch(page_texts: dict[int, str]) -> dict[int, str]:
         return {int(k): v for k, v in instruments.items()}
     except json.JSONDecodeError as e:
         raise PDFAnalyzerError(
-            f"Failed to parse JSON from Copilot: {e}. "
-            f"Response may be malformed - try running again."
+            f"Failed to parse JSON from LLM: {e}. Response may be malformed - try running again."
         ) from e
 
 
 def extract_json_from_response(response: str) -> str | None:
-    """Extract JSON object from Copilot response."""
+    """Extract JSON object from LLM response."""
     # Try to find JSON in code blocks first
     json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL)
     if json_match:
@@ -340,7 +364,7 @@ def extract_json_from_response(response: str) -> str | None:
 def process_instrument_results(
     instruments_dict: dict[int, str], total_pages: int
 ) -> list[InstrumentPage]:
-    """Process Copilot results and handle continuation pages."""
+    """Process LLM results and handle continuation pages."""
     results: list[InstrumentPage] = []
     last_known_instrument: str | None = None
 
@@ -373,7 +397,9 @@ def process_instrument_results(
     return results
 
 
-def group_pages_by_instrument(pages: list[InstrumentPage], output_dir: Path | None = None) -> list[SplitCommand]:
+def group_pages_by_instrument(
+    pages: list[InstrumentPage], output_dir: Path | None = None
+) -> list[SplitCommand]:
     """Group consecutive pages by instrument into split commands."""
     if not pages:
         return []
@@ -388,7 +414,11 @@ def group_pages_by_instrument(pages: list[InstrumentPage], output_dir: Path | No
             safe_name = sanitize_filename(current_instrument)
             commands.append(
                 SplitCommand(
-                    current_instrument, start_page, pages[i - 1].page_num, f"{safe_name}.pdf", output_dir
+                    current_instrument,
+                    start_page,
+                    pages[i - 1].page_num,
+                    f"{safe_name}.pdf",
+                    output_dir,
                 )
             )
             # Start new group
@@ -398,7 +428,9 @@ def group_pages_by_instrument(pages: list[InstrumentPage], output_dir: Path | No
     # Add final group
     safe_name = sanitize_filename(current_instrument)
     commands.append(
-        SplitCommand(current_instrument, start_page, pages[-1].page_num, f"{safe_name}.pdf", output_dir)
+        SplitCommand(
+            current_instrument, start_page, pages[-1].page_num, f"{safe_name}.pdf", output_dir
+        )
     )
 
     return commands
@@ -474,7 +506,10 @@ def main() -> int:
         "--yes", "-y", action="store_true", help="Skip confirmation prompt and execute immediately"
     )
     parser.add_argument(
-        "--out", type=Path, default=None, help="Output directory for split PDF files (default: current directory)"
+        "--out",
+        type=Path,
+        default=None,
+        help="Output directory for split PDF files (default: current directory)",
     )
     args = parser.parse_args()
 
@@ -508,9 +543,18 @@ def main() -> int:
             page_texts[page_num] = text
         print(f"  ✓ OCR complete for {total_pages} pages.          ", file=sys.stderr)
 
-        # Step 2: Analyze with Copilot
-        print("\nStep 2: Analyzing all pages with Copilot (1 request)...", file=sys.stderr)
-        instruments_dict = ask_copilot_batch(page_texts)
+        # Step 2: Analyze with LLM
+        api_key = os.environ.get("OPENAI_API_KEY")
+        api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+        model = os.environ.get("OPENAI_MODEL", "z-ai/glm-5.2")
+
+        if not api_key:
+            raise DependencyError(
+                "OPENAI_API_KEY not set. Please set the OPENAI_API_KEY environment variable."
+            )
+
+        print("\nStep 2: Analyzing all pages with LLM (1 request)...", file=sys.stderr)
+        instruments_dict = ask_llm_batch(page_texts, api_key, api_base, model)
 
         # Step 3: Process results
         print("\nStep 3: Processing results...", file=sys.stderr)
