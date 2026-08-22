@@ -1,0 +1,15 @@
+name: dev
+base: ubuntu@24.04
+sdks:
+  - name: opencode
+  - name: uv
+environment:
+  system_packages:
+    - python3
+    - tesseract-ocr
+    - tesseract-ocr-deu
+    - tesseract-ocr-eng
+    - imagemagick
+    - poppler-utils
+    - pdftk-java
+    - python3-openai
