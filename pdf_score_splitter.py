@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Wind Band PDF Score Splitter - AI-powered instrument recognition and splitting.
 
 Copyright (c) 2026 Christian Ehrhardt <paelzer@gmail.com>
