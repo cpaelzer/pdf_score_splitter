@@ -21,6 +21,7 @@ from pdf_score_splitter import (
     extract_json_from_response,
     group_pages_by_instrument,
     process_instrument_results,
+    resolve_llm_config,
     sanitize_filename,
 )
 
@@ -233,6 +234,54 @@ class TestCheckDependencies:
             check_dependencies()
 
         assert "python3-openai" in str(exc_info.value)
+
+
+class TestResolveLlmConfig:
+    """Test LLM configuration resolution."""
+
+    def test_env_defaults(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_API_KEY": "env-key",
+                "OPENAI_API_BASE": "https://env",
+                "OPENAI_MODEL": "env-model",
+            },
+        ):
+            key, base, model = resolve_llm_config(None, None, None)
+
+        assert key == "env-key"
+        assert base == "https://env"
+        assert model == "env-model"
+
+    def test_cli_overrides_env(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_API_KEY": "env-key",
+                "OPENAI_API_BASE": "https://env",
+                "OPENAI_MODEL": "env-model",
+            },
+        ):
+            key, base, model = resolve_llm_config("cli-key", "https://cli", "cli-model")
+
+        assert key == "cli-key"
+        assert base == "https://cli"
+        assert model == "cli-model"
+
+    def test_built_in_defaults(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}, clear=True):
+            key, base, model = resolve_llm_config(None, None, None)
+
+        assert key == "env-key"
+        assert base == "https://openrouter.ai/api/v1"
+        assert model == "z-ai/glm-5.2"
+
+    def test_missing_key_raises(self):
+        with patch.dict("os.environ", {}, clear=True), pytest.raises(DependencyError) as exc_info:
+            resolve_llm_config(None, None, None)
+
+        assert "OPENAI_API_KEY" in str(exc_info.value)
 
 
 @pytest.fixture

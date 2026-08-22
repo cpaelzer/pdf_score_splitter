@@ -91,6 +91,26 @@ def check_dependencies() -> None:
         raise DependencyError("Missing required dependencies:\n" + "\n".join(missing))
 
 
+def resolve_llm_config(
+    api_key: str | None,
+    api_base: str | None,
+    model: str | None,
+) -> tuple[str, str, str]:
+    """Resolve and validate LLM configuration from CLI args and env vars.
+
+    Priority: CLI arg > env var > built-in default.
+    """
+    key = api_key or os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise DependencyError(
+            "OPENAI_API_KEY not set. "
+            "Please set the OPENAI_API_KEY environment variable or pass it via --api-key."
+        )
+    base = api_base or os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+    mdl = model or os.environ.get("OPENAI_MODEL", "z-ai/glm-5.2")
+    return key, base, mdl
+
+
 def get_page_count(pdf_path: Path) -> int:
     """Get the number of pages in a PDF file."""
     try:
@@ -511,6 +531,21 @@ def main() -> int:
         default=None,
         help="Output directory for split PDF files (default: current directory)",
     )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="OpenAI-compatible API key (default: OPENAI_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--api-base",
+        default=None,
+        help="API base URL (default: OPENAI_API_BASE env var or https://openrouter.ai/api/v1)",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name (default: OPENAI_MODEL env var or z-ai/glm-5.2)",
+    )
     args = parser.parse_args()
 
     try:
@@ -544,15 +579,9 @@ def main() -> int:
         print(f"  ✓ OCR complete for {total_pages} pages.          ", file=sys.stderr)
 
         # Step 2: Analyze with LLM
-        api_key = os.environ.get("OPENAI_API_KEY")
-        api_base = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
-        model = os.environ.get("OPENAI_MODEL", "z-ai/glm-5.2")
+        api_key, api_base, model = resolve_llm_config(args.api_key, args.api_base, args.model)
 
-        if not api_key:
-            raise DependencyError(
-                "OPENAI_API_KEY not set. Please set the OPENAI_API_KEY environment variable."
-            )
-
+        print(f"\nUsing model: {model} (base: {api_base})", file=sys.stderr)
         print("\nStep 2: Analyzing all pages with LLM (1 request)...", file=sys.stderr)
         instruments_dict = ask_llm_batch(page_texts, api_key, api_base, model)
 
