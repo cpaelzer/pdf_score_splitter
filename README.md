@@ -1,10 +1,10 @@
 # Wind Band PDF Score Splitter
 
-AI-powered tool to automatically split wind band/concert band PDF scores into separate files for each instrument part using OCR and GitHub Copilot.
+AI-powered tool to automatically split wind band/concert band PDF scores into separate files for each instrument part using OCR and an OpenAI-compatible LLM.
 
 ## Features
 
-- 🤖 **AI-Powered**: Uses GitHub Copilot to intelligently identify instruments
+- 🤖 **AI-Powered**: Uses an OpenAI-compatible LLM (GLM-5.2 by default) to intelligently identify instruments
 - ⚡ **Efficient**: Makes only 1 API request per PDF (not per page)
 - 🌍 **Multi-language**: Handles German and English instrument names
 - 🔧 **Robust**: Deals with OCR errors and spelling variations
@@ -16,7 +16,7 @@ AI-powered tool to automatically split wind band/concert band PDF scores into se
 ### 1. System Dependencies
 
 The tool requires several system utilities for PDF processing and OCR
-and to later install copilot CLI.
+and to use the OpenAI-compatible LLM API.
 
 #### Step 1.1: Install System Dependencies
 
@@ -25,13 +25,13 @@ and to later install copilot CLI.
 sudo apt-get update
 sudo apt-get install -y \
     python3 \
+    python3-openai \
     tesseract-ocr \
     tesseract-ocr-deu \
     tesseract-ocr-eng \
     imagemagick \
     poppler-utils \
-    pdftk-java \
-    npm
+    pdftk-java
 ```
 
 #### Step 1.2: Set Up UV and Python Virtual Environment (Optional, for Development)
@@ -52,26 +52,28 @@ source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-### 2. GitHub Copilot CLI
+### 2. LLM API Key
 
-You need the GitHub Copilot CLI installed and authenticated:
+The tool communicates with an OpenAI-compatible LLM API. By default it uses
+the OpenRouter endpoint with the `z-ai/glm-5.2` model.
+
+Set the following environment variable:
 
 ```bash
-# Install GitHub Copilot CLI
-# Follow instructions at: https://github.com/github/copilot-cli
-# Usually via npm: npm install -g @github/copilot
+# Required: your API key
+export OPENAI_API_KEY="your-api-key-here"
 
-# After installation, authenticate (this will open a browser)
-copilot
+# Optional: override the default base URL (https://openrouter.ai/api/v1)
+export OPENAI_API_BASE="https://openrouter.ai/api/v1"
 
-# Verify it works
-copilot --help
+# Optional: override the default model (z-ai/glm-5.2)
+export OPENAI_MODEL="z-ai/glm-5.2"
 ```
 
-**Important**: This tool uses GitHub Copilot which requires:
-- A GitHub account with Copilot access
-- The Copilot CLI to be installed and logged in
-  - No environment variables needed - authentication is handled by the CLI itself
+You can also pass these via CLI flags (`--api-key`, `--api-base`, `--model`),
+which take priority over the environment variables. Note that `--api-key` is
+visible in your shell history, so the environment variable is preferred for
+credentials.
 
 ### Verifying Installation
 
@@ -104,8 +106,8 @@ python3 pdf_score_splitter.py --pdf your_score.pdf --yes --out parts
 
 1. **Dependency Check**: Verifies all required tools are installed
 2. **OCR Extraction**: Converts each PDF page to an image and extracts text (shows progress)
-3. **AI Analysis**: Sends all OCR text in one batch to GitHub Copilot (1 API call)
-4. **Instrument Recognition**: Copilot identifies each instrument using contextual understanding
+3. **AI Analysis**: Sends all OCR text in one batch to the LLM (1 API call)
+4. **Instrument Recognition**: The LLM identifies each instrument using contextual understanding
 5. **Confirmation**: Shows you what will be created and asks for confirmation (unless --yes)
 6. **Execution**: Runs pdftk commands to split the PDF
 7. **Results**: Reports successes and any failures with actionable guidance
@@ -122,8 +124,10 @@ Processing 49 pages from 'score.pdf'...
 Step 1: Extracting text with OCR...
   ✓ OCR complete for 49 pages.
 
-Step 2: Analyzing all pages with Copilot (1 request)...
-  Sending batch request to Copilot...
+Using model: z-ai/glm-5.2 (base: https://openrouter.ai/api/v1)
+
+Step 2: Analyzing all pages with LLM (1 request)...
+  Sending batch request to LLM...
   Prompt includes 22,882 characters
   Received response: 1,168 characters
   Successfully parsed 49 instrument assignments
@@ -191,7 +195,7 @@ uv pip install -e ".[dev]"
 
 ### Running Tests
 
-The project includes comprehensive tests with mocked Copilot API calls (no tokens consumed):
+The project includes comprehensive tests with mocked LLM API calls (no tokens consumed):
 
 ```bash
 # Make sure you're in the virtual environment first!
@@ -249,10 +253,15 @@ pytest --cov=pdf_score_splitter --cov-report=term-missing
 
 ## Troubleshooting
 
-### "GitHub Copilot CLI not found"
-- Install the Copilot CLI: https://github.com/github/gh-copilot
-- Make sure it's in your PATH
-- Run `copilot` once to authenticate
+### "OPENAI_API_KEY not set"
+- Set the `OPENAI_API_KEY` environment variable with your API key
+- Or pass it via `--api-key` (note: this is visible in shell history)
+- The tool will not proceed without a valid API key
+
+### "LLM API request failed" or timeout
+- Check that your API key is valid for the configured base URL
+- For large PDFs, the request may take longer - check your internet connection
+- Try a different model or provider via `--model` and `--api-base`
 
 ### "Missing required dependencies"
 The error message will tell you exactly what's missing and how to install it:

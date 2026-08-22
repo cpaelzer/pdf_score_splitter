@@ -1,14 +1,14 @@
 [project]
 name = "pdf-score-splitter"
 version = "1.0.0"
-description = "AI-powered wind band PDF score splitter using OCR and GitHub Copilot"
+description = "AI-powered wind band PDF score splitter using OCR and OpenAI-compatible LLM"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "PDF Splitter Contributors" }
 ]
-keywords = ["pdf", "music", "wind-band", "ocr", "ai", "copilot"]
+keywords = ["pdf", "music", "wind-band", "ocr", "ai", "openai", "glm"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
